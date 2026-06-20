@@ -1,0 +1,19 @@
+/**:
+  ros__parameters:
+    projector:     false
+    color_width:   640
+    color_height:  360
+    color_fps:     15
+    infra2_width:  640
+    infra2_height: 360
+    infra2_fps:    15
+
+/camera_55/camera_55:
+  ros__parameters:
+    serial:   "419222301921"   # 192.168.11.55
+    frame_id: "camera_55"
+
+/camera_56/camera_56:
+  ros__parameters:
+    serial:   "353522302286"   # 192.168.11.56
+    frame_id: "camera_56"
