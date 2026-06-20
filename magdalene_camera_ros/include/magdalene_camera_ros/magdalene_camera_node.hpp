@@ -1,3 +1,9 @@
+/**
+ * @file magdalene_camera_node.hpp
+ * @brief ROS 2 node interface for the magdalene_camera RealSense driver.
+ * @author Julio Fajardo, PhD
+ */
+
 #pragma once
 
 // Forward declaration: keeps librealsense2 headers out of the ROS2 main TU

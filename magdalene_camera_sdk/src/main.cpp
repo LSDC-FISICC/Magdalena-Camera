@@ -1,6 +1,7 @@
 /**
  * @file main.cpp
  * @brief Standalone viewer for the magdalene_camera SDK.
+ * @author Julio Fajardo, PhD
  *
  * Opens a RealSense camera via the magdalene_camera driver, displays the color
  * and right-infrared streams in separate OpenCV windows, and allows the user to

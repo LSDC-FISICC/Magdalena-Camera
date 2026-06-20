@@ -1,6 +1,7 @@
 /**
  * @file magdalene_camera_wrapper.cpp
  * @brief Implementation of the magdalene_camera RealSense driver.
+ * @author Julio Fajardo, PhD
  *
  * Wraps the librealsense2 pipeline to stream color (BGR8) and right-infrared
  * (Y8) frames. Provides runtime control over stream resolution/FPS and the

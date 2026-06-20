@@ -5,6 +5,8 @@ Launch file for starting one magdalene_camera_node per camera defined in
 cameras.yaml. Camera names are discovered automatically by scanning the YAML
 for top-level sections of the form ``/<name>/<name>``, so adding or removing
 a camera only requires editing the config file — no changes to this file needed.
+
+Author: Julio Fajardo, PhD
 """
 
 import os

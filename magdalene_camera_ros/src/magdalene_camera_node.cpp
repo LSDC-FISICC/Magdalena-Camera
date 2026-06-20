@@ -1,6 +1,7 @@
 /**
  * @file magdalene_camera_node.cpp
  * @brief Implementation of MagdaleneCameraNode, a ROS 2 wrapper for the RealSense camera.
+ * @author Julio Fajardo, PhD
  *
  * Declares ROS 2 parameters, instantiates the magdalene_camera driver, and
  * publishes color and infrared frames on separate image_transport topics from a

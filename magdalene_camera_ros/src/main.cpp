@@ -1,6 +1,7 @@
 /**
  * @file main.cpp
  * @brief Entry point for the ROS 2 magdalene_camera_node.
+ * @author Julio Fajardo, PhD
  *
  * Initializes the ROS 2 context, instantiates MagdaleneCameraNode (which internally
  * opens the RealSense camera and launches the capture thread), and keeps the node

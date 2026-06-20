@@ -1,3 +1,9 @@
+/**
+ * @file magdalene_camera.hpp
+ * @brief Public interface for the magdalene_camera RealSense driver.
+ * @author Julio Fajardo, PhD
+ */
+
 #pragma once
 
 #include <librealsense2/rs.hpp>
