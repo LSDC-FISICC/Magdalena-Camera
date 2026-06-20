@@ -1,4 +1,4 @@
-# magdalene_camera
+# Magdalene Camera Wrapper (ros2)
 
 ROS2 packages for Intel RealSense D555 camera integration over Ethernet PoE, supporting multiple cameras identified by serial number.
 
