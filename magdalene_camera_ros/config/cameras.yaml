@@ -17,3 +17,18 @@
   ros__parameters:
     serial:   "353522302286"   # 192.168.11.56
     frame_id: "camera_56"
+
+/camera_57/camera_57:
+  ros__parameters:
+    serial:   "409122301544"   # 192.168.11.57
+    frame_id: "camera_57"
+
+/camera_58/camera_58:
+  ros__parameters:
+    serial:   "408222300679"   # 192.168.11.58
+    frame_id: "camera_58"
+
+/camera_59/camera_59:
+  ros__parameters:
+    serial:   "353522301659"   # 192.168.11.59
+    frame_id: "camera_59"
