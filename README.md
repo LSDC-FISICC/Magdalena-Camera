@@ -20,6 +20,7 @@ magdalene_camera_ros    (ROS 2 bridge: SDK to topics)
 /camera_55/infra2/image_raw
 /camera_56/color/image_raw
 /camera_56/infra2/image_raw
+…                             (one pair per camera, camera_55 … camera_59)
 ```
 
 `colcon` builds `magdalene_camera_sdk` first (declared dependency), then `magdalene_camera_ros`.
@@ -124,6 +125,27 @@ rs-dds-config --serial-number 353522302286 \
     --mask 255.255.255.0 \
     --gateway 192.168.11.1 \
     --priority eth-first
+
+# Camera 3
+rs-dds-config --serial-number 409122301544 \
+    --ip 192.168.11.57 \
+    --mask 255.255.255.0 \
+    --gateway 192.168.11.1 \
+    --priority eth-first
+
+# Camera 4
+rs-dds-config --serial-number 408222300679 \
+    --ip 192.168.11.58 \
+    --mask 255.255.255.0 \
+    --gateway 192.168.11.1 \
+    --priority eth-first
+
+# Camera 5
+rs-dds-config --serial-number 353522301659 \
+    --ip 192.168.11.59 \
+    --mask 255.255.255.0 \
+    --gateway 192.168.11.1 \
+    --priority eth-first
 ```
 
 `--priority eth-first` makes the camera publish via DDS on power-up without requiring USB.
@@ -199,6 +221,21 @@ All parameters live in `config/cameras.yaml`. Common parameters are declared onc
   ros__parameters:
     serial:   "353522302286"   # 192.168.11.56
     frame_id: "camera_56"
+
+/camera_57/camera_57:
+  ros__parameters:
+    serial:   "409122301544"   # 192.168.11.57
+    frame_id: "camera_57"
+
+/camera_58/camera_58:
+  ros__parameters:
+    serial:   "408222300679"   # 192.168.11.58
+    frame_id: "camera_58"
+
+/camera_59/camera_59:
+  ros__parameters:
+    serial:   "353522301659"   # 192.168.11.59
+    frame_id: "camera_59"
 ```
 
 To add a camera, append a new `/name/name` section. The launch file auto-discovers all entries and starts one node per camera.
@@ -282,6 +319,9 @@ These are set in `config/cameras.yaml`. The table below lists all available para
    ```bash
    ping 192.168.11.55
    ping 192.168.11.56
+   ping 192.168.11.57
+   ping 192.168.11.58
+   ping 192.168.11.59
    ```
 
 3. Verify the switch is **not** in Extend Mode. Port LEDs should indicate Gigabit, not 10/100 Mbps.
