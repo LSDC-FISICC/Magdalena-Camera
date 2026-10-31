@@ -7,7 +7,7 @@ ROS 2 wrapper and SDK abstraction for Intel RealSense D555 PoE cameras. Designed
 The D555 cameras connect via Power-over-Ethernet. This repository contains two packages that work together:
 
 - **`magdalene_camera_sdk`**: C++17 library wrapping `librealsense2`. Pure hardware abstraction with no ROS 2 dependencies; can be linked into non-ROS applications. Handles network connection, profile negotiation, and exposes frames as `cv::Mat`.
-- **`magdalene_camera_ros`**: ROS 2 node using the SDK as backend. Reads parameters per camera, instantiates one `magdalene_camera` object per device, publishes as `sensor_msgs/msg/Image` with sensor_data QoS.
+- **`magdalene_camera_ros`**: ROS 2 node using the SDK as backend. Reads parameters per camera, instantiates one `magdalene_camera` object per device, publishes as `sensor_msgs/msg/Image` with the default `image_transport` QoS (reliable, keep last 10).
 
 ```
 librealsense2
@@ -383,7 +383,7 @@ Mitigations in order of effort:
 
 ### `ros2 topic hz` reports half the expected rate
 
-The CLI tool deserializes every message in Python and falls behind for large image payloads. Use `ros2 topic bw` instead and compute the rate from message size, or write a dedicated subscriber with explicit BEST_EFFORT QoS.
+The CLI tool deserializes every message in Python and falls behind for large image payloads. Use `ros2 topic bw` instead and compute the rate from message size, or [`tools/sysmon.py topics`](tools/README.md), a subscriber that counts messages without deserializing them. Subscribe reliable, like the publisher: a best-effort subscriber of large raw images can lose frames inside DDS even when nothing else is wrong.
 
 ### `std::bad_array_new_length` on node startup
 
