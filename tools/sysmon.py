@@ -46,7 +46,7 @@ import time
 from pathlib import Path
 
 PROC_PATTERNS = "magdalene,camera,inference,modbus,realsense,yolo,trtexec,component_container"
-TOPIC_REGEX = r"image_raw$|[Tt]rigger"
+TOPIC_REGEX = r"color/image_raw$|[Tt]rigger"
 SYSCTLS = ["net.core.rmem_max", "net.core.rmem_default", "net.core.wmem_max", "net.core.wmem_default",
            "net.core.netdev_max_backlog", "net.ipv4.ipfrag_high_thresh", "net.ipv4.ipfrag_time",
            "net.ipv4.udp_mem", "vm.swappiness"]

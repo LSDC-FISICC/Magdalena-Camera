@@ -307,6 +307,8 @@ These are set in `config/cameras.yaml`. The table below lists all available para
 
 ## Troubleshooting
 
+To find whether a problem comes from memory, the GPU, the network or USB, record a run with [`tools/sysmon.py`](tools/README.md): it logs every drop counter between the cable and the ROS topic, memory and GPU use, and the real rate of each camera topic, and names the likely cause.
+
 ### Cameras not discovered (`rs-enumerate-devices --eth` returns empty)
 
 1. Verify host NIC MTU is **9000**:
