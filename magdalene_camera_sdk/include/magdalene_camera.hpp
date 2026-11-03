@@ -62,6 +62,9 @@ private:
     bool         running_;
     std::string  serial_;
 
+    // Context with Ethernet (DDS) discovery enabled: librealsense 2.58 leaves it off by default,
+    // so PoE cameras would not be found. USB cameras are still enumerated as before.
+    rs2::context          ctx_;
     rs2::pipeline         pipeline_;
     rs2::config           rs_cfg_;
     rs2::pipeline_profile profile_;

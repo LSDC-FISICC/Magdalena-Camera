@@ -29,6 +29,8 @@ magdalene_camera::magdalene_camera(StreamConfig color_cfg,
     , projector_enabled_(projector_enabled)
     , running_(false)
     , serial_(std::move(serial))
+    , ctx_(R"({"dds": {"enabled": true}})")
+    , pipeline_(ctx_)
 {}
 
 /**
