@@ -53,6 +53,9 @@ public:
     std::string  serial_number()     const { return serial_; }
 
 private:
+    // Seconds to keep retrying the pipeline start while an Ethernet camera is being discovered
+    static constexpr int kStartTimeoutS = 15;
+
     StreamConfig color_cfg_;
     StreamConfig infra2_cfg_;
     bool         projector_enabled_;

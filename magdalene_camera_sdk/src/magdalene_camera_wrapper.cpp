@@ -9,7 +9,9 @@
  */
 
 #include "magdalene_camera.hpp"
+#include <chrono>
 #include <iostream>
+#include <thread>
 
 /**
  * @brief Constructs the camera object with the given stream configurations.
@@ -94,8 +96,14 @@ void magdalene_camera::configure_streams()
 
 /**
  * @brief Starts the librealsense pipeline and applies the projector setting.
+ *
+ * Ethernet (DDS) cameras are discovered asynchronously, a few seconds after the
+ * librealsense context is created, so a start right after construction can
+ * find no device. The start is therefore retried every 500 ms for up to
+ * kStartTimeoutS seconds before the last librealsense error is reported.
+ *
  * @throws std::runtime_error if the camera is already running or librealsense
- *         reports an error during pipeline start.
+ *         reports an error during pipeline start until the timeout expires.
  */
 void magdalene_camera::start()
 {
@@ -104,11 +112,21 @@ void magdalene_camera::start()
 
     configure_streams();
 
-    try {
-        profile_ = pipeline_.start(rs_cfg_);
-    } catch (const rs2::error& e) {
-        throw std::runtime_error(std::string("librealsense error on start: ") + e.what());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(kStartTimeoutS);
+    int attempts = 0;
+    while (true) {
+        try {
+            ++attempts;
+            profile_ = pipeline_.start(rs_cfg_);
+            break;
+        } catch (const rs2::error& e) {
+            if (std::chrono::steady_clock::now() >= deadline)
+                throw std::runtime_error(std::string("librealsense error on start: ") + e.what());
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
     }
+    if (attempts > 1)
+        std::cout << "[magdalene_camera] device found after " << attempts << " attempts\n";
 
     running_ = true;
     apply_projector_setting();
