@@ -383,10 +383,26 @@ def cmd_compare(args):
             print(f"{k:42s} {va:>24s}   {vb}")
 
 
+def give_back(paths):
+    """Under sudo, hand folders created by `record` (and the files in the output folder) back to
+    the invoking user, so that `topics` and `report`, which run without sudo, can write there."""
+    uid, gid = os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")
+    if os.geteuid() != 0 or not uid:
+        return
+    for path in paths:
+        for p in [path] + (list(path.rglob("*")) if path.is_dir() else []):
+            try:
+                os.chown(p, int(uid), int(gid or uid))
+            except OSError:
+                pass
+
+
 def cmd_record(args):
-    out = Path(args.output)
+    out = Path(args.output).expanduser().absolute()
+    created = [d for d in [out, *out.parents] if not d.exists()]  # folders this run creates
     out.mkdir(parents=True, exist_ok=True)
     cmd_snapshot(argparse.Namespace(output=str(out / "snapshot.json")))
+    give_back(created + [out])
     ifs = args.iface.split(",") if args.iface else interfaces()
     patterns = [p for p in args.procs.split(",") if p]
     gpu, klog = gpu_source(), KernelLog(out / "kernel.csv")
@@ -474,6 +490,7 @@ def cmd_record(args):
         klog.close()
         fs.close()
         fp.close()
+        give_back([out])
         print(f"done; run: python3 {sys.argv[0]} report {out}")
 
 
