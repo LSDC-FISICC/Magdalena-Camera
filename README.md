@@ -17,10 +17,9 @@ magdalene_camera_sdk    (camera connection, no ROS 2)
 magdalene_camera_ros    (ROS 2 bridge: SDK to topics)
      ↓
 /camera_55/color/image_raw
-/camera_55/infra2/image_raw
 /camera_56/color/image_raw
-/camera_56/infra2/image_raw
-…                             (one pair per camera, camera_55 … camera_59)
+…                             (one per camera, camera_55 … camera_59)
+/camera_55/infra2/image_raw   (only with infra2_enabled: true)
 ```
 
 `colcon` builds `magdalene_camera_sdk` first (declared dependency), then `magdalene_camera_ros`.
@@ -87,7 +86,7 @@ Common consumer 8-port unmanaged switches (TP-Link LS108GP at 62 W, Netgear GS30
 | Infrared 2 | Y8 | 0.23 MB | 3.5 MB/s |
 | **Total per camera** | | | **~13.9 MB/s** |
 
-For 5 cameras: ~70 MB/s = 560 Mbps. Fits within Gigabit headroom on multi-queue NICs.
+By default only the color stream is enabled (`infra2_enabled: false`): about 10.4 MB/s per camera and ~52 MB/s = 420 Mbps for 5 cameras. With infrared enabled: ~70 MB/s = 560 Mbps. Both fit within Gigabit headroom on multi-queue NICs.
 
 ## Software prerequisites
 
@@ -202,7 +201,8 @@ All parameters live in `config/cameras.yaml`. Common parameters are declared onc
 ```yaml
 /**:
   ros__parameters:
-    projector:     false
+    projector:      false
+    infra2_enabled: false
     color_width:   640
     color_height:  360
     color_fps:     15
@@ -271,7 +271,7 @@ ros2 topic bw /camera_55/color/image_raw   # should report ~10.4 MB/s
 
 ## SDK standalone test
 
-`main.cpp` opens one camera and displays color and infrared streams with OpenCV. No ROS 2 required. Accepts the serial number as an optional argument:
+`main.cpp` opens one camera and displays the color stream with OpenCV (and the infrared stream with `--infra2`). No ROS 2 required. Accepts the serial number as an optional argument:
 
 ```bash
 source ~/magdalene_ws/install/setup.bash
@@ -281,11 +281,14 @@ ros2 run magdalene_camera_sdk magdalene_camera_demo 419222301921
 
 # first available camera
 ros2 run magdalene_camera_sdk magdalene_camera_demo
+
+# color and infrared
+ros2 run magdalene_camera_sdk magdalene_camera_demo 419222301921 --infra2
 ```
 
 Controls:
 - `q` or `Esc`: quit
-- `p`: toggle IR projector
+- `p`: toggle IR projector (with `--infra2`)
 
 ## Node parameters
 
@@ -296,6 +299,7 @@ These are set in `config/cameras.yaml`. The table below lists all available para
 | `serial` | `""` | Device serial number (empty = first available) |
 | `frame_id` | node name | TF frame id stamped on published images |
 | `projector` | `false` | Enable IR projector |
+| `infra2_enabled` | `false` | Stream and publish the right infrared image; when `false` only color is captured and the `infra2/image_raw` topic is not created |
 | `color_width` | `640` | Color stream width in pixels |
 | `color_height` | `360` | Color stream height in pixels |
 | `color_fps` | `15` | Color stream frame rate |

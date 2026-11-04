@@ -19,14 +19,17 @@
  * @param infra2_cfg  Resolution and FPS for the right infrared stream.
  * @param projector_enabled Whether the IR dot projector should be on at start.
  * @param serial      Device serial number; empty string selects any device.
+ * @param infra2_enabled Whether to stream the right infrared image as well as color.
  */
 magdalene_camera::magdalene_camera(StreamConfig color_cfg,
                                    StreamConfig infra2_cfg,
                                    bool         projector_enabled,
-                                   std::string  serial)
+                                   std::string  serial,
+                                   bool         infra2_enabled)
     : color_cfg_(color_cfg)
     , infra2_cfg_(infra2_cfg)
     , projector_enabled_(projector_enabled)
+    , infra2_enabled_(infra2_enabled)
     , running_(false)
     , serial_(std::move(serial))
     , ctx_(R"({"dds": {"enabled": true}})")
@@ -88,12 +91,13 @@ void magdalene_camera::configure_streams()
                           RS2_FORMAT_BGR8,
                           color_cfg_.fps);
 
-    // Infrared index 2 = right stereo camera
-    rs_cfg_.enable_stream(RS2_STREAM_INFRARED,
-                          2,
-                          infra2_cfg_.width, infra2_cfg_.height,
-                          RS2_FORMAT_Y8,
-                          infra2_cfg_.fps);
+    // Infrared index 2 = right stereo camera; off by default (the classifier uses color only)
+    if (infra2_enabled_)
+        rs_cfg_.enable_stream(RS2_STREAM_INFRARED,
+                              2,
+                              infra2_cfg_.width, infra2_cfg_.height,
+                              RS2_FORMAT_Y8,
+                              infra2_cfg_.fps);
 }
 
 /**
@@ -136,9 +140,12 @@ void magdalene_camera::start()
     std::cout << "[magdalene_camera] started — "
               << "color " << color_cfg_.width << "x" << color_cfg_.height
               << "@" << color_cfg_.fps << "fps | "
-              << "infra2 " << infra2_cfg_.width << "x" << infra2_cfg_.height
-              << "@" << infra2_cfg_.fps << "fps | "
-              << "projector " << (projector_enabled_ ? "ON" : "OFF") << "\n";
+              << "infra2 ";
+    if (infra2_enabled_)
+        std::cout << infra2_cfg_.width << "x" << infra2_cfg_.height << "@" << infra2_cfg_.fps << "fps";
+    else
+        std::cout << "OFF";
+    std::cout << " | projector " << (projector_enabled_ ? "ON" : "OFF") << "\n";
 }
 
 /**
@@ -163,10 +170,11 @@ bool magdalene_camera::is_running() const { return running_; }
  * retry on the next iteration.
  *
  * @param color_out   Output BGR8 color frame.
- * @param infra2_out  Output Y8 right-infrared frame.
+ * @param infra2_out  Output Y8 right-infrared frame; released (empty) when the
+ *                    infrared stream is disabled.
  * @param timeout_ms  Maximum wait time in milliseconds.
- * @returns true if both frames were decoded successfully, false on timeout or
- *          invalid frame.
+ * @returns true if the enabled frames were decoded successfully, false on
+ *          timeout or invalid frame.
  * @throws std::runtime_error if called while the camera is not running.
  */
 bool magdalene_camera::wait_for_frames(cv::Mat& color_out, cv::Mat& infra2_out,
@@ -187,6 +195,11 @@ bool magdalene_camera::wait_for_frames(cv::Mat& color_out, cv::Mat& infra2_out,
         color_frame.get_height(), color_frame.get_width(),
         CV_8UC3, const_cast<void*>(color_frame.get_data())
     ).clone();
+
+    if (!infra2_enabled_) {
+        infra2_out.release();
+        return true;
+    }
 
     rs2::video_frame infra2_frame = frameset.get_infrared_frame(2);
     if (!infra2_frame || infra2_frame.get_width() <= 0 || infra2_frame.get_height() <= 0)
