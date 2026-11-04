@@ -1,5 +1,7 @@
 # sysmon: finding what limits the camera pipeline
 
+> On a Jetson, run `sudo bash tools/jetson_poe_setup.sh` once before measuring (UDP buffers, `jetson_clocks` at boot, camera network profile, ROS 2 environment); see the main README, *Jetson Orin Nano over PoE*.
+
 `sysmon.py` tells whether a capture problem (dropped frames, low or irregular rate, freezes, crashes) comes from **memory**, the **GPU**, the **network** or **USB**. It runs unchanged on the Jetson Orin Nano and on x86 laptops with an NVIDIA GPU, so the same run can be compared across machines.
 
 It needs only Python 3. `matplotlib` is optional (for the plot) and `ethtool` is optional (for the NIC driver counters).

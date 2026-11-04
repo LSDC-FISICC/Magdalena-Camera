@@ -100,7 +100,7 @@ By default only the color stream is enabled (`infra2_enabled: false`): about 10.
 | `ros-humble-cv-bridge` | | |
 | `ros-humble-image-transport` | | |
 | `ros-humble-rmw-cyclonedds-cpp` | | required, see [Known issues](#known-issues) |
-| D555 firmware | 5.18.x or later | check via `realsense-viewer` → device → Device tab |
+| D555 firmware | 7.58.38448.10612 tested | needs librealsense ≥ 2.58.2; with 2.57 the cameras are listed but cannot be opened. Check with `rs-enumerate-devices --eth -s` |
 
 Refer to the [librealsense release notes](https://github.com/realsenseai/librealsense/wiki/Release-Notes) for the latest firmware compatible with SDK 2.58.
 
@@ -309,6 +309,46 @@ These are set in `config/cameras.yaml`. The table below lists all available para
 | `infra2_fps` | `15` | Infrared stream frame rate |
 | `infra2_format` | `Y8` | Infrared format (only `Y8` supported) |
 
+## Jetson Orin Nano over PoE
+
+Tested on a Jetson Orin Nano Developer Kit (8 GB, L4T 36.5 / JetPack 6.2, 15 W, `jetson_clocks`) with five D555 on a TP-Link PoE switch: all five color streams at 15.0 Hz for 147 s, no gap longer than one frame (70 ms), 282 Mb/s on the 1 GbE port, no packet or UDP buffer drops, 11 % CPU. Measured with [`tools/sysmon.py`](tools/README.md).
+
+### One-time setup
+
+1. **librealsense 2.58.2 with DDS**, built on the Jetson into `/usr/local` (about an hour). The ROS 2 package of librealsense (`/opt/ros/humble/lib/.../librealsense2.so.2.57`) has no DDS support and cannot see PoE cameras; it stays installed for USB cameras.
+   ```bash
+   sudo apt install -y git cmake build-essential pkg-config libssl-dev libusb-1.0-0-dev libudev-dev
+   git clone --depth 1 --branch v2.58.2 https://github.com/realsenseai/librealsense.git ~/librealsense-2.58.2
+   cd ~/librealsense-2.58.2 && mkdir -p build && cd build
+   cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+     -DBUILD_WITH_DDS=ON -DFORCE_RSUSB_BACKEND=ON -DBUILD_WITH_CUDA=OFF \
+     -DBUILD_EXAMPLES=OFF -DBUILD_TOOLS=ON -DBUILD_GRAPHICAL_EXAMPLES=OFF \
+     -DBUILD_PYTHON_BINDINGS=OFF -DBUILD_UNIT_TESTS=OFF
+   make -j4 && sudo make install && sudo ldconfig
+   ```
+   `BUILD_EXAMPLES=ON` without `BUILD_GRAPHICAL_EXAMPLES=ON` fails in 2.58 (`OpenGL::GL` not found).
+2. **CycloneDDS**: `sudo apt install ros-humble-rmw-cyclonedds-cpp`.
+3. **Persistent settings**: `sudo bash tools/jetson_poe_setup.sh` sets the UDP buffers (`/etc/sysctl.d/60-dds.conf`), runs `jetson_clocks` at every boot, creates the NetworkManager profile `poe-camaras` (`192.168.11.1/24`, MTU 9000, connected at boot) and adds ROS 2 Humble + CycloneDDS + this workspace to `~/.bashrc`. `bash tools/jetson_poe_setup.sh --check` reports the current state. The profile takes the wired port; for internet on the same port, `sudo nmcli con up <dhcp-profile>`, and back with `sudo nmcli con up poe-camaras`.
+4. **Build this workspace against `/usr/local`**:
+   ```bash
+   colcon build --symlink-install --cmake-args -Drealsense2_DIR=/usr/local/lib/cmake/realsense2
+   ```
+   The node then links `librealsense2.so.2.58` from `/usr/local/lib`; no `LD_LIBRARY_PATH` is needed.
+5. **PoE switch**: turn off the port *recovery* (auto power-cycle) and *extend* modes of TP-Link switches; with recovery on, two of five cameras stopped for 10–35 s at a time.
+
+### What each item fixed
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `stream 'ObjectDetection' is of unknown type`; `No device connected` | firmware 7.58 needs librealsense ≥ 2.58.2 | librealsense 2.58.2 |
+| `rs-enumerate-devices` lists nothing, `--eth` lists the cameras | DDS discovery is off by default in 2.58 | the SDK enables it in its context |
+| `No device connected` right after start | Ethernet devices appear a few seconds after the context is created | the SDK retries for 15 s |
+| Some cameras deliver no frames; `sysmon` reports UDP receive-buffer overflows | default `net.core.rmem_max` (212 kB) | `60-dds.conf` |
+| Cameras stop for 10–35 s at a time | switch PoE recovery mode | recovery off |
+| CPU at 730 MHz after a reboot | `jetson_clocks` is not persistent | `jetson-clocks.service` |
+
+On a Cisco Catalyst 3850, two of five cameras still lost most frames with the settings above; its default egress buffers are a likely cause (check `show interfaces <port> | include output drops`; `qos queue-softmax-multiplier 1200` enlarges them). Not resolved.
+
 ## Troubleshooting
 
 To find whether a problem comes from memory, the GPU, the network or USB, record a run with [`tools/sysmon.py`](tools/README.md): it logs every drop counter between the cable and the ROS topic, memory and GPU use, and the real rate of each camera topic, and names the likely cause.
@@ -395,7 +435,7 @@ See [Known issues](#known-issues).
 
 ### Camera publishes but image stream freezes after a few seconds
 
-Likely cause is PoE undervoltage. Check:
+On TP-Link switches, first turn off the port recovery (auto power-cycle) mode: it restarts cameras that it judges unresponsive. Otherwise, the likely cause is PoE undervoltage. Check:
 
 ```bash
 sudo ethtool eno2 | grep -E "Speed|Duplex"
