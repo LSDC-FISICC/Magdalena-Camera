@@ -24,8 +24,9 @@ Usage
   python3 sysmon.py topics -o run1                    # terminal 2, ROS sourced
   python3 sysmon.py report run1                       # summary + plot
 
-sudo is optional: without it the kernel log and the per-process GPU memory on
-the Jetson are skipped.
+sudo is optional: without it the kernel log, the traffic per camera address
+(--hosts, iptables counters) and the per-process GPU memory on the Jetson are
+skipped.
 
 Author: Julio Fajardo, PhD
 """
@@ -38,6 +39,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -46,6 +48,7 @@ import time
 from pathlib import Path
 
 PROC_PATTERNS = "magdalene,camera,inference,modbus,realsense,yolo,trtexec,component_container"
+CAMERA_HOSTS = "192.168.11.55-59"  # PoE cameras of cameras.yaml; traffic per source is counted under sudo
 TOPIC_REGEX = r"color/image_raw$|[Tt]rigger"
 SYSCTLS = ["net.core.rmem_max", "net.core.rmem_default", "net.core.wmem_max", "net.core.wmem_default",
            "net.core.netdev_max_backlog", "net.ipv4.ipfrag_high_thresh", "net.ipv4.ipfrag_time",
@@ -283,6 +286,56 @@ class NoGpu:
     close = lambda self: None
 
 
+def expand_hosts(spec):
+    """'192.168.11.55-59,10.0.0.7' -> list of addresses."""
+    out = []
+    for part in filter(None, (x.strip() for x in spec.split(","))):
+        m = re.fullmatch(r"(\d+\.\d+\.\d+\.)(\d+)-(\d+)", part)
+        out += [f"{m[1]}{i}" for i in range(int(m[2]), int(m[3]) + 1)] if m else [part]
+    return out
+
+
+class SourceCounter:
+    """Bytes and packets received from each camera address, from iptables counters in a chain of
+    its own (no filtering: every rule only RETURNs). Counted at the local INPUT hook, i.e. after the
+    NIC, the driver and IP reassembly, so a camera whose data arrives here at its full rate while
+    its topic publishes nothing loses the frames in user space (librealsense/DDS), not on the wire.
+    Needs root and iptables; the chain is removed on exit."""
+    CHAIN = "SYSMON_SRC"
+
+    def __init__(self, hosts):
+        self.hosts, self.ok = hosts, False
+        if not hosts or os.geteuid() != 0 or not shutil.which("iptables"):
+            return
+        self.close()  # leftovers of an interrupted run
+        cmds = [["-N", self.CHAIN]] + [["-A", self.CHAIN, "-s", h, "-j", "RETURN"] for h in hosts] \
+            + [["-I", "INPUT", "1", "-j", self.CHAIN]]
+        self.ok = all(self._ipt(*c).returncode == 0 for c in cmds)
+        if not self.ok:
+            self.close()
+
+    def _ipt(self, *a):
+        return subprocess.run(["iptables", "-w", *a], capture_output=True, text=True)
+
+    def sample(self):
+        """{host: (bytes, packets)} cumulative."""
+        res = {}
+        if self.ok:
+            for line in self._ipt("-nvxL", self.CHAIN).stdout.splitlines()[2:]:
+                f = line.split()  # pkts bytes target prot [opt] in out source destination
+                host = next((x for x in f[3:] if x in self.hosts), None)
+                if host and f[0].isdigit() and f[1].isdigit():
+                    res[host] = (int(f[1]), int(f[0]))
+        return res
+
+    def close(self):
+        if shutil.which("iptables") and os.geteuid() == 0:
+            while self._ipt("-D", "INPUT", "-j", self.CHAIN).returncode == 0:
+                pass
+            self._ipt("-F", self.CHAIN)
+            self._ipt("-X", self.CHAIN)
+
+
 def gpu_source():
     for cls in (Tegrastats, NvidiaSmi):
         if cls.available():
@@ -410,6 +463,10 @@ def cmd_record(args):
         print("kernel log not readable (run with sudo to record USB resets, link changes and OOM kills)")
     if isinstance(gpu, Tegrastats) and not gpu.per_process():
         print("per-process GPU memory needs sudo on the Jetson; total shared RAM is still recorded")
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt))  # plain kill: clean up too
+    srcs = SourceCounter(expand_hosts(args.hosts))
+    if args.hosts and not srcs.ok:
+        print("traffic per camera address not recorded (needs sudo and iptables)")
 
     cols = ["t", "ram_used_mb", "ram_avail_mb", "ram_total_mb", "swap_used_mb", "shm_used_mb", "cpu_pct",
             "cpu_max_core_pct", "softirq_max_core_pct", "gpu_util_pct", "emc_util_pct", "gpu_mem_used_mb",
@@ -418,6 +475,9 @@ def cmd_record(args):
     for i in ifs:
         cols += [f"{i}_rx_mbps", f"{i}_tx_mbps", f"{i}_drops", f"{i}_hw_drops", f"{i}_carrier_changes",
                  f"{i}_speed"]
+    if srcs.ok:
+        for h in srcs.hosts:
+            cols += [f"src_{h}_mbps", f"src_{h}_pps"]
     fs, fp = open(out / "sys.csv", "w", newline=""), open(out / "procs.csv", "w", newline="")
     ws, wp = csv.DictWriter(fs, cols), csv.writer(fp)
     ws.writeheader()
@@ -426,6 +486,7 @@ def cmd_record(args):
     prev_cpu, prev_snmp, prev_t = cpu_times(), snmp(), time.time()
     prev_nic = {i: nic_counters(i) for i in ifs}
     prev_hw = {i: ethtool_drops(i) for i in ifs}
+    prev_src = srcs.sample()
     names, t_end = {}, (time.time() + args.duration) if args.duration else None
     print(f"recording to {out}/ every {args.interval}s on {', '.join(ifs)}; Ctrl+C to stop")
     try:
@@ -467,6 +528,12 @@ def cmd_record(args):
                 hw = ethtool_drops(i) if prev_hw[i] is not None else None
                 row[f"{i}_hw_drops"] = hw - prev_hw[i] if hw is not None else ""
                 prev_nic[i], prev_hw[i] = c, hw
+            cur_src = srcs.sample()
+            for h, (b, n) in cur_src.items():
+                pb, pn = prev_src.get(h, (b, n))
+                row[f"src_{h}_mbps"] = round(8 * (b - pb) / dt / 1e6, 2)
+                row[f"src_{h}_pps"] = round((n - pn) / dt)
+            prev_src = cur_src or prev_src
             ws.writerow(row)
             fs.flush()
             gmem = gpu.per_process()
@@ -480,12 +547,15 @@ def cmd_record(args):
                 g = f" gpu {row.get('gpu_mem_used_mb', '-')}/{row.get('gpu_mem_total_mb', '-')}MB" \
                     if "gpu_mem_used_mb" in row else ""
                 drops = sum(row[f"{i}_drops"] for i in ifs) + row["udp_rcvbuf_errors"] + row["ip_reasm_fails"]
+                cams = " cam[Mb/s] " + " ".join(f"{h.split('.')[-1]}:{row.get(f'src_{h}_mbps', 0):.0f}"
+                                                 for h in srcs.hosts) if srcs.ok else ""
                 print(f"\rram {row['ram_used_mb']}/{row['ram_total_mb']}MB swap {row['swap_used_mb']}MB{g} "
-                      f"cpu {row['cpu_pct']}% rx[Mb/s] {rx or '-'} drops {drops}   ", end="", flush=True)
+                      f"cpu {row['cpu_pct']}% rx[Mb/s] {rx or '-'}{cams} drops {drops}   ", end="", flush=True)
     except KeyboardInterrupt:
         pass
     finally:
         print()
+        srcs.close()
         gpu.close()
         klog.close()
         fs.close()
@@ -669,6 +739,31 @@ def cmd_report(args):
             if i == "lo" and max(rx) > 200:
                 hints.append(f"{max(rx):.0f} Mb/s over loopback: raw images copied between ROS processes via DDS "
                              "(composable nodes/intra-process or shared-memory transport avoid it)")
+        srcs = [c[4:-5] for c in rows[0] if c.startswith("src_") and c.endswith("_mbps")]
+        if srcs:
+            say("received per camera address (Mb/s mean / min of 10-s means, mean datagram bytes):")
+            topic_hz = {}
+            for r in topics:
+                topic_hz.setdefault(r["topic"], []).append(float(r["hz"]))
+            full = sorted(sum(num(rows, f"src_{h}_mbps")) / len(rows) for h in srcs)[-1]
+            for h in srcs:
+                mb, pps = num(rows, f"src_{h}_mbps"), num(rows, f"src_{h}_pps")
+                win = [sum(mb[k:k + 10]) / len(mb[k:k + 10]) for k in range(0, len(mb), 10)]
+                size = 1e6 * sum(mb) / 8 / max(sum(pps), 1)
+                say(f"  {h:16s} {sum(mb) / len(mb):7.1f} / {min(win):6.1f}   {size:7.0f}")
+                hz = [v for name, vs in topic_hz.items() if re.search(rf"camera_?{h.split('.')[-1]}\b", name)
+                      and "image" in name for v in vs]
+                if not hz or full < 5:
+                    continue
+                rate, share = sum(hz) / len(hz), sum(mb) / len(mb) / full
+                if rate < 0.5 * args.fps and share > 0.8:
+                    hints.append(f"{h} delivered {100 * share:.0f}% of the best camera's traffic to the host, but "
+                                 f"its topic averaged {rate:.1f} Hz: frames are lost after the kernel "
+                                 "(librealsense/DDS reassembly or the node), not on the wire")
+                elif rate < 0.5 * args.fps and share < 0.5:
+                    hints.append(f"{h} delivered only {100 * share:.0f}% of the best camera's traffic and its topic "
+                                 f"averaged {rate:.1f} Hz: the camera is not sending, or the switch drops its "
+                                 "packets before the Jetson")
     if procs:
         say("largest processes (RSS max MB, growth MB, GPU MB):")
         by = {}
@@ -798,6 +893,9 @@ def main():
     p.add_argument("-o", "--output", required=True, help="output folder")
     p.add_argument("--iface", help="comma-separated interfaces (default: all, loopback included)")
     p.add_argument("--procs", default=PROC_PATTERNS, help="command-line substrings of processes to track")
+    p.add_argument("--hosts", default=CAMERA_HOSTS,
+                   help=f"camera addresses whose received traffic is counted separately (sudo; default "
+                        f"{CAMERA_HOSTS}; '' to skip)")
     p.add_argument("--interval", type=float, default=1.0)
     p.add_argument("--duration", type=float, help="seconds (default: until Ctrl+C)")
     p.add_argument("-q", "--quiet", action="store_true")

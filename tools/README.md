@@ -17,6 +17,7 @@ It needs only Python 3. `matplotlib` is optional (for the plot) and `ethtool` is
 | Memory | RAM used/available, swap, `/dev/shm` | `/proc/meminfo` |
 | GPU | memory used/total, load, temperature, power | `nvidia-smi` (laptop), `tegrastats` (Jetson) |
 | Network, per interface (loopback included) | rx/tx Mb/s, dropped packets in kernel and driver, link speed, link up/down events | `/sys/class/net`, `ethtool -S` |
+| Traffic per camera (sudo) | Mb/s and packets/s received from each camera address (`--hosts`, default `192.168.11.55-59`), counted after the NIC and IP reassembly | `iptables` counters in a chain of its own, removed on exit |
 | Kernel network stack | UDP receive/send buffer overflows, UDP errors, failed IP reassemblies | `/proc/net/snmp` |
 | CPU | total, busiest core, softirq (network interrupt) time of the busiest core | `/proc/stat` |
 | Processes | memory (RSS) of the camera, inference and Modbus processes, plus the 3 largest; GPU memory per process | `/proc`, `nvidia-smi` / nvmap (Jetson, root only) |
@@ -53,7 +54,7 @@ python3 tools/sysmon.py topics -o runs/orin_poe_5cam           # terminal 2 (ROS
 python3 tools/sysmon.py report runs/orin_poe_5cam
 ```
 
-`record` and `topics` write into the same folder. `sudo` for `record` is optional: without it the kernel log and the per-process GPU memory on the Jetson are skipped, and the script says so. Do not run `topics` with `sudo`, because `sudo` drops the ROS environment.
+`record` and `topics` write into the same folder. `sudo` for `record` is optional: without it the kernel log, the traffic per camera and the per-process GPU memory on the Jetson are skipped, and the script says so. Do not run `topics` with `sudo`, because `sudo` drops the ROS environment.
 
 Both commands accept `--duration <seconds>` instead of Ctrl+C.
 
@@ -144,6 +145,8 @@ zip -r sysmon_runs.zip runs/ *.json
 | Camera interface above 70 % of the link speed | Link saturated | Turn off unused streams (infra2 is ~25 % of the traffic); lower resolution |
 | High Mb/s on `lo` | Raw images copied between ROS processes over loopback | Composable nodes with intra-process communication |
 | USB reset/disconnect messages | USB cameras: cable, hub power, bandwidth | Powered hub, one camera per controller, `usbfs_memory_mb=1000` |
+| A camera's traffic reaches the host at its full rate (~55 Mb/s) but its topic publishes nothing | Frames lost after the kernel: librealsense/DDS or the node | Restart that node; check the librealsense version and the other camera processes |
+| A camera's traffic is far below the others while it answers ping | The camera stopped sending, or the switch drops its packets before the Jetson | Restart that node; then the switch (buffers, multi-gigabit uplink) and the camera's port |
 | Topic below 13.5 Hz with none of the above | CPU-bound stage or middleware | Check the busiest core and the process list |
 
 The expected wire bandwidth at the default profile is in the main README: about 111 Mb/s per camera with color and infra2, about 560 Mb/s for five.
