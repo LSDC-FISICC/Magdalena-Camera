@@ -311,7 +311,9 @@ These are set in `config/cameras.yaml`. The table below lists all available para
 
 ## Jetson Orin Nano over PoE
 
-Tested on a Jetson Orin Nano Developer Kit (8 GB, L4T 36.5 / JetPack 6.2, 15 W, `jetson_clocks`) with five D555 on a TP-Link PoE switch: all five color streams at 15.0 Hz for 147 s, no gap longer than one frame (70 ms), 282 Mb/s on the 1 GbE port, no packet or UDP buffer drops, 11 % CPU. Measured with [`tools/sysmon.py`](tools/README.md).
+Tested on a Jetson Orin Nano Developer Kit (8 GB, L4T 36.5 / JetPack 6.2, 15 W, `jetson_clocks`) with five D555 on a TP-Link PoE switch: all five color streams at 15.0 Hz, no gap longer than one frame (70 ms), 282 Mb/s on the 1 GbE port, no packet or UDP buffer drops, 11 % CPU. Measured with [`tools/sysmon.py`](tools/README.md).
+
+**This holds for about 20 minutes, not indefinitely** (see [*Two cameras fail together after ~20 min*](#two-cameras-fail-together-after-20-min)). Five PoE cameras through a gigabit switch into the Jetson's single 1 GbE port is not reliable for continuous operation; the field system uses USB 3.2.
 
 ### One-time setup
 
@@ -347,7 +349,30 @@ Tested on a Jetson Orin Nano Developer Kit (8 GB, L4T 36.5 / JetPack 6.2, 15 W, 
 | Cameras stop for 10–35 s at a time | switch PoE recovery mode | recovery off |
 | CPU at 730 MHz after a reboot | `jetson_clocks` is not persistent | `jetson-clocks.service` |
 
-On a Cisco Catalyst 3850, two of five cameras still lost most frames with the settings above; its default egress buffers are a likely cause (check `show interfaces <port> | include output drops`; `qos queue-softmax-multiplier 1200` enlarges them). Not resolved.
+### Two cameras fail together after ~20 min
+
+In 30- and 60-minute runs on the TP-Link switch, after 20–25 min two cameras slowed down over 2–3 minutes and then delivered almost no frames, while still answering ping. Restarting the node of **either** camera of the pair brought the **other** one back to 15 Hz within one second, before the restarted camera streamed again; the restarted camera then also ran at 15 Hz. Later another pair failed the same way.
+
+| Run (60 min, `sysmon`) | |
+|---|---|
+| 22–25 min | cameras .57 and .59 fall to ~0 Hz; .55, .56, .58 stay at 15 Hz |
+| 25.3 min | node of .59 restarted: .57 back to 15 Hz in 1 s, .59 after 6 s |
+| 41–44 min | cameras .55 and .57 fall; node of .55 restarted: .57 back in 1 s |
+| whole run | 0 UDP buffer overflows, 0 IP reassembly failures, 0 NIC/driver drops, Tj 60 °C, ping never lost |
+
+During each failure the Jetson port still received 274–278 Mb/s instead of 282: the cameras kept sending, and the ~5–8 Mb/s missing fit a few percent of the two cameras' packets being lost before the Jetson. One 640×360 frame is ~460 KB, about 50 jumbo packets, so losing ~5 % of a camera's packets loses nearly every frame.
+
+What this points to: the two failing streams interfere with each other on a path they share, and the Jetson counts no loss, which leaves the switch port towards the Jetson. Each camera sends a frame as a ~3.7 ms burst at 1 Gb/s; the cameras are not synchronized, so their bursts drift relative to each other. When two bursts start to overlap, the switch must buffer up to half a frame for the single 1 GbE egress port, and a small unmanaged switch drops the excess. Restarting either camera shifts its phase and ends the overlap until the drift brings two streams together again. A hot switch would not recover in one second, and a fault in one node process could not stop a camera served by another process.
+
+On a Cisco Catalyst 3850, two of five cameras also lost most frames; its default egress buffers are small (check `show interfaces <port> | include output drops`; `qos queue-softmax-multiplier 1200` enlarges them).
+
+Options, from the most to the least robust:
+- **Multi-gigabit host link**: a 2.5 or 10 GbE NIC on the Jetson (e.g. an M.2 Key M card; check that L4T has its driver) and a switch with a multi-gigabit uplink, as the D555 documentation recommends for several cameras. The egress then drains faster than two 1 Gb/s bursts arrive.
+- **A switch with deep egress buffers**, or two Jetson ports with at most 2–3 cameras each.
+- **Restarting the stream automatically** when a camera's rate falls (not implemented): it hides the symptom at the cost of a 1–6 s gap for that camera.
+- **USB 3.2**, as in the field system.
+
+To check a run, `sudo python3 tools/sysmon.py record` counts the traffic of each camera address: a failing camera whose traffic drops by a few percent while the Jetson counts no loss fits this explanation.
 
 ## Troubleshooting
 
