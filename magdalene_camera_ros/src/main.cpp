@@ -22,7 +22,14 @@ int main(int argc, char ** argv)
     rclcpp::init(argc, argv);          // Initialize the global ROS 2 context
     try {
         // Create the node and keep it alive processing callbacks
-        rclcpp::spin(std::make_shared<MagdaleneCameraNode>());
+        auto node = std::make_shared<MagdaleneCameraNode>();
+        rclcpp::spin(node);
+        // The stream watchdog shut ROS down: report it so the launch file's respawn is visible
+        if (node->watchdog_exit()) {
+            node.reset();              // stop the capture thread and the camera before exiting
+            rclcpp::shutdown();
+            return kWatchdogExitCode;
+        }
     } catch (const std::exception & e) {
         // Log the error before shutting down to aid diagnosis
         RCLCPP_FATAL(rclcpp::get_logger("magdalene_camera_node"),

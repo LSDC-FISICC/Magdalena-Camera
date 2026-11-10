@@ -8,12 +8,12 @@
     infra2_width:  640
     infra2_height: 360
     infra2_fps:    15
-    # Stream watchdog: restart when the color rate stays below fraction x color_fps
-    watchdog_min_fraction: 0.67   # 0.0 disables restarts (write it as a float)
-    watchdog_low_s:        3      # seconds below the threshold before a restart is scheduled
-    watchdog_jitter_s:     3.0    # random wait, cancelled if the rate recovers
-    watchdog_grace_s:      15.0   # no decisions after a start or restart
-    watchdog_max_per_min:  3
+    # Stream watchdog: the node exits when the color rate stays below fraction x color_fps,
+    # and multi_camera.launch.py starts it again (respawn) in a fresh process
+    watchdog_min_fraction: 0.67   # 0.0 disables it (write it as a float)
+    watchdog_low_s:        3      # seconds below the threshold before an exit is scheduled
+    watchdog_jitter_s:     5.0    # random wait, cancelled if the rate recovers
+    watchdog_grace_s:      20.0   # no decision this long after the start
 
 /camera_55/camera_55:
   ros__parameters:

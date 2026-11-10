@@ -9,10 +9,13 @@
  * dedicated capture thread.
  *
  * A stream watchdog measures the color rate once per second (published on
- * color/fps) and restarts the librealsense pipeline when the rate stays below
- * watchdog_min_fraction x color_fps. Over PoE, two cameras whose frame bursts
- * overlap at the switch lose most of their frames until one of them restarts;
- * a restart shifts that camera's phase and both recover (see the README).
+ * color/fps). When the rate stays below watchdog_min_fraction x color_fps the
+ * node shuts down with exit code kWatchdogExitCode, and the launch file starts
+ * it again (respawn) in a fresh process. Over PoE, two cameras whose frame
+ * bursts overlap at the switch lose most of their frames until one of them
+ * restarts; restarting the process shifts that camera's phase and both recover
+ * (see the README). Restarting the pipeline inside the same process did not
+ * bring Ethernet cameras back, so the whole process is restarted.
  */
 
 #include "magdalene_camera_ros/magdalene_camera_node.hpp"
@@ -36,12 +39,11 @@ MagdaleneCameraNode::MagdaleneCameraNode(const rclcpp::NodeOptions & options)
     declare_parameter("infra2_width",  640);
     declare_parameter("infra2_height", 360);
     declare_parameter("infra2_fps",    15);
-    // Stream watchdog: restart when the color rate stays below fraction x color_fps
-    declare_parameter("watchdog_min_fraction", 0.67);  // 0.0 disables restarts (color/fps is still published)
-    declare_parameter("watchdog_low_s",        3);     // seconds below the threshold before a restart is scheduled
-    declare_parameter("watchdog_jitter_s",     3.0);   // random wait before restarting; cancelled if the rate recovers
-    declare_parameter("watchdog_grace_s",      15.0);  // no decisions this long after a start or restart
-    declare_parameter("watchdog_max_per_min",  3);     // restart limit per camera and minute
+    // Stream watchdog: exit (and be respawned) when the color rate stays below fraction x color_fps
+    declare_parameter("watchdog_min_fraction", 0.67);  // 0.0 disables it (color/fps is still published)
+    declare_parameter("watchdog_low_s",        3);     // seconds below the threshold before an exit is scheduled
+    declare_parameter("watchdog_jitter_s",     5.0);   // random wait before exiting; cancelled if the rate recovers
+    declare_parameter("watchdog_grace_s",      20.0);  // no decision this long after the start
 
     auto serial    = get_parameter("serial").as_string();
     frame_id_      = get_parameter("frame_id").as_string();
@@ -71,20 +73,18 @@ MagdaleneCameraNode::MagdaleneCameraNode(const rclcpp::NodeOptions & options)
     min_fps_      = std::max(0.0, get_parameter("watchdog_min_fraction").as_double()) * color_cfg.fps;
     low_s_needed_ = std::max<int>(1, get_parameter("watchdog_low_s").as_int());
     jitter_s_     = std::max(0.0, get_parameter("watchdog_jitter_s").as_double());
-    grace_s_      = std::max(0.0, get_parameter("watchdog_grace_s").as_double());
-    max_per_min_  = std::max<int>(1, get_parameter("watchdog_max_per_min").as_int());
+    const double grace_s = std::max(0.0, get_parameter("watchdog_grace_s").as_double());
     rng_.seed(std::random_device{}());
 
     cam_->start();
-    grace_until_ns_ = (Clock::now() + std::chrono::duration_cast<Clock::duration>(
-                          std::chrono::duration<double>(grace_s_))).time_since_epoch().count();
     running_ = true;
     capture_thread_ = std::thread(&MagdaleneCameraNode::capture_loop, this);
-    last_tick_ = Clock::now();
+    last_tick_   = Clock::now();
+    grace_until_ = last_tick_ + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(grace_s));
     watchdog_timer_ = create_wall_timer(std::chrono::seconds(1), [this] { watchdog_tick(); });
     if (min_fps_ > 0)
-        RCLCPP_INFO(get_logger(), "Stream watchdog: restart below %.1f fps for %d s (jitter %.1f s, "
-                    "grace %.0f s, max %d/min)", min_fps_, low_s_needed_, jitter_s_, grace_s_, max_per_min_);
+        RCLCPP_INFO(get_logger(), "Stream watchdog: exit for respawn below %.1f fps for %d s "
+                    "(jitter %.1f s, grace %.0f s)", min_fps_, low_s_needed_, jitter_s_, grace_s);
 
     RCLCPP_INFO(get_logger(), "Started — serial: %s  frame_id: %s",
                 serial.empty() ? "(any)" : serial.c_str(), frame_id_.c_str());
@@ -112,10 +112,6 @@ void MagdaleneCameraNode::capture_loop()
 {
     cv::Mat color, infra2;
     while (running_) {
-        if (restart_requested_ || !cam_->is_running()) {
-            restart_stream();
-            continue;
-        }
         try {
             if (!cam_->wait_for_frames(color, infra2, 500))
                 continue;
@@ -136,49 +132,14 @@ void MagdaleneCameraNode::capture_loop()
 }
 
 /**
- * @brief Stops and restarts the librealsense pipeline (capture thread only).
+ * @brief Once per second: publishes the color rate and decides whether to exit.
  *
- * Only the capture thread touches the pipeline, so a restart never races with
- * wait_for_frames(). If the start fails (camera unreachable for kStartTimeoutS),
- * the camera stays stopped and the capture loop tries again after a pause.
- */
-void MagdaleneCameraNode::restart_stream()
-{
-    restarting_ = true;
-    const auto t0 = Clock::now();
-    const bool was_running = cam_->is_running();
-    if (was_running) {
-        ++restart_count_;
-        RCLCPP_WARN(get_logger(), "Restarting the stream (restart %d)", restart_count_);
-        try {
-            cam_->stop();
-        } catch (const std::exception & e) {
-            RCLCPP_ERROR(get_logger(), "Stream stop failed: %s", e.what());
-        }
-    }
-    try {
-        cam_->start();
-        RCLCPP_INFO(get_logger(), "Stream running again after %.1f s",
-                    std::chrono::duration<double>(Clock::now() - t0).count());
-    } catch (const std::exception & e) {
-        RCLCPP_ERROR(get_logger(), "Stream start failed, retrying in 2 s: %s", e.what());
-        for (int i = 0; i < 20 && running_; ++i)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    frames_ = 0;
-    grace_until_ns_ = (Clock::now() + std::chrono::duration_cast<Clock::duration>(
-                          std::chrono::duration<double>(grace_s_))).time_since_epoch().count();
-    restart_requested_ = false;
-    restarting_ = false;
-}
-
-/**
- * @brief Once per second: publishes the color rate and decides whether to restart.
- *
- * A restart is scheduled after watchdog_low_s consecutive seconds below the
+ * An exit is scheduled after watchdog_low_s consecutive seconds below the
  * threshold, at a random delay of up to watchdog_jitter_s, and cancelled if the
- * rate recovers before then. With two cameras failing together, the first one to
- * restart usually frees the other, whose pending restart is then cancelled.
+ * rate recovers before then. With two cameras failing together, the first one
+ * to restart usually frees the other, whose pending exit is then cancelled.
+ * The exit shuts ROS down; main() returns kWatchdogExitCode and the launch file
+ * respawns the node.
  */
 void MagdaleneCameraNode::watchdog_tick()
 {
@@ -191,13 +152,8 @@ void MagdaleneCameraNode::watchdog_tick()
     msg.data = static_cast<float>(fps);
     fps_pub_->publish(msg);
 
-    if (min_fps_ <= 0)
+    if (min_fps_ <= 0 || exit_requested_ || now < grace_until_)
         return;
-    if (restarting_ || restart_requested_ || now.time_since_epoch().count() < grace_until_ns_) {
-        low_s_ = 0;
-        pending_ = false;
-        return;
-    }
     if (fps >= min_fps_) {
         if (pending_)
             RCLCPP_INFO(get_logger(), "Color rate back to %.1f fps, restart cancelled", fps);
@@ -208,26 +164,15 @@ void MagdaleneCameraNode::watchdog_tick()
     if (!pending_ && ++low_s_ >= low_s_needed_) {
         std::uniform_real_distribution<double> wait(0.0, jitter_s_);
         const double w = wait(rng_);
-        restart_at_ = now + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(w));
+        exit_at_ = now + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(w));
         pending_ = true;
-        RCLCPP_WARN(get_logger(), "Color rate %.1f fps below %.1f for %d s; restart in %.1f s unless it recovers",
-                    fps, min_fps_, low_s_, w);
+        RCLCPP_WARN(get_logger(), "Color rate %.1f fps below %.1f for %d s; restarting the node in %.1f s "
+                    "unless it recovers", fps, min_fps_, low_s_, w);
     }
-    if (!pending_ || now < restart_at_)
-        return;
-
-    while (!restarts_.empty() && now - restarts_.front() > std::chrono::minutes(1))
-        restarts_.pop_front();
-    pending_ = false;
-    low_s_ = 0;
-    if (static_cast<int>(restarts_.size()) >= max_per_min_) {
-        // Hold off quietly until the oldest restart leaves the one-minute window
-        const auto resume = restarts_.front() + std::chrono::minutes(1);
-        grace_until_ns_ = resume.time_since_epoch().count();
-        RCLCPP_ERROR(get_logger(), "%d restarts in the last minute: next restart allowed in %.0f s",
-                     max_per_min_, std::chrono::duration<double>(resume - now).count());
-        return;
+    if (pending_ && now >= exit_at_) {
+        exit_requested_ = true;
+        RCLCPP_WARN(get_logger(), "Restarting the node (exit code %d, respawned by the launch file)",
+                    kWatchdogExitCode);
+        rclcpp::shutdown();
     }
-    restarts_.push_back(now);
-    restart_requested_ = true;
 }

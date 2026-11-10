@@ -309,11 +309,12 @@ These are set in `config/cameras.yaml`. The table below lists all available para
 | `infra2_height` | `360` | Infrared stream height in pixels |
 | `infra2_fps` | `15` | Infrared stream frame rate |
 | `infra2_format` | `Y8` | Infrared format (only `Y8` supported) |
-| `watchdog_min_fraction` | `0.67` | Restart the stream when the color rate stays below this fraction of `color_fps` (10 fps at 15 fps); `0.0` disables restarts (a float: `0` is rejected as an integer), `color/fps` is still published |
-| `watchdog_low_s` | `3` | Seconds below the threshold before a restart is scheduled |
-| `watchdog_jitter_s` | `3.0` | Random wait before the restart, cancelled if the rate recovers meanwhile; when two cameras fail together, the first restart usually frees the other |
-| `watchdog_grace_s` | `15.0` | No restart decisions this long after a start or restart |
-| `watchdog_max_per_min` | `3` | Restart limit per camera and minute |
+| `watchdog_min_fraction` | `0.67` | Exit, to be respawned by the launch file, when the color rate stays below this fraction of `color_fps` (10 fps at 15 fps); `0.0` disables it (a float: `0` is rejected as an integer), `color/fps` is still published |
+| `watchdog_low_s` | `3` | Seconds below the threshold before an exit is scheduled |
+| `watchdog_jitter_s` | `5.0` | Random wait before the exit, cancelled if the rate recovers meanwhile; when two cameras fail together, the first restart usually frees the other |
+| `watchdog_grace_s` | `20.0` | No decision this long after the node starts |
+
+`multi_camera.launch.py` starts the nodes `stagger_s` seconds apart (default `2.0`) and starts a node again when it exits (`respawn:=true`, the default), after 2 s plus 0.7 s per camera index. A node stopped by the watchdog exits with code 3. `respawn:=false stagger_s:=0` restores the previous behavior.
 
 ## Jetson Orin Nano over PoE
 
@@ -375,7 +376,7 @@ On a Cisco Catalyst 3850, two of five cameras also lost most frames; its default
 Options, from the most to the least robust:
 - **Multi-gigabit host link**: a 2.5 or 10 GbE NIC on the Jetson (e.g. an M.2 Key M card; check that L4T has its driver) and a switch with a multi-gigabit uplink, as the D555 documentation recommends for several cameras. The egress then drains faster than two 1 Gb/s bursts arrive.
 - **A switch with deep egress buffers**, or two Jetson ports with at most 2–3 cameras each.
-- **Restarting the stream automatically** when a camera's rate falls: the node's stream watchdog (`watchdog_*` parameters, on by default) does this. It hides the symptom, not the cause, at the cost of a few seconds with few or no frames from that camera: about 3 s below the threshold, up to 3 s of jitter, then the restart itself (1–6 s on the bench). The node logs every restart (`Restarting the stream`), and `color/fps` shows the rate without subscribing to the images.
+- **Restarting the camera automatically** when its rate falls: the node's stream watchdog (`watchdog_*` parameters, on by default) exits and the launch file respawns it in a fresh process, which is what the manual restarts did. Restarting the pipeline inside the same process left Ethernet cameras without frames, so the whole process is restarted. It hides the symptom, not the cause, at the cost of a few seconds with few or no frames from that camera: about 3 s below the threshold, up to 5 s of jitter, the respawn delay and the camera start. The log shows each restart (`Restarting the node`), and `color/fps` shows the rate without subscribing to the images.
 - **USB 3.2**, as in the field system.
 
 To check a run, `sudo python3 tools/sysmon.py record` counts the traffic of each camera address: a failing camera whose traffic drops by a few percent while the Jetson counts no loss fits this explanation.
