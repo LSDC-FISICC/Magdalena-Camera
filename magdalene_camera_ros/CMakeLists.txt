@@ -26,6 +26,18 @@ ament_target_dependencies(magdalene_camera_node
 target_link_libraries(magdalene_camera_node
     magdalene_camera_sdk::magdalene_camera
 )
+# Load librealsense from the directory the SDK was built against (/usr/local, with DDS), even when
+# the ROS environment puts ros-humble-librealsense2 (same soname, no DDS) first in LD_LIBRARY_PATH.
+# DT_RPATH, unlike DT_RUNPATH, is searched before LD_LIBRARY_PATH.
+if(realsense2_DIR)
+    get_filename_component(MAGDALENE_REALSENSE_LIBDIR "${realsense2_DIR}/../.." ABSOLUTE)
+else()
+    set(MAGDALENE_REALSENSE_LIBDIR /usr/local/lib)
+endif()
+message(STATUS "librealsense from ${MAGDALENE_REALSENSE_LIBDIR} (RPATH)")
+set_target_properties(magdalene_camera_node PROPERTIES
+    BUILD_RPATH "${MAGDALENE_REALSENSE_LIBDIR}" INSTALL_RPATH "${MAGDALENE_REALSENSE_LIBDIR}")
+target_link_options(magdalene_camera_node PRIVATE "LINKER:--disable-new-dtags")
 
 install(TARGETS magdalene_camera_node
     DESTINATION lib/${PROJECT_NAME}
