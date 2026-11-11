@@ -160,3 +160,15 @@ To check a fix, change one setting, repeat the same run and compare the two `sum
 - Frame age is meaningful only when the publisher stamps with the clock of the machine running `topics`, which is the case for this node.
 - Process memory is matched by command-line substrings (`--procs`, default `magdalene,camera,inference,modbus,realsense,yolo,trtexec,component_container`).
 - On a laptop, `nvidia-smi` per-process memory covers compute processes only (CUDA, TensorRT), not the desktop.
+
+# plc_test: network, Modbus and watchdog of the PLC
+
+`plc_test.py` checks the LOGO! PLC (192.168.11.60) from the Jetson. Stop the `modbus_controller` node first, so that this is the only Modbus client. It needs `pyModbusTCP`.
+
+```bash
+python3 tools/plc_test.py read  -o runs/plc --duration 300          # round trip of coil reads; nothing moves
+python3 tools/plc_test.py write -o runs/plc --hydraulics-off         # each valve coil on/off, read back
+python3 tools/plc_test.py watchdog -o runs/plc --hydraulics-off      # release time of the PLC watchdog
+```
+
+`write` and `watchdog` move the valves: run them with the pump and the hydraulics de-energized. `watchdog` switches the valve coils on, toggles the heartbeat coil (`--heartbeat-coil`, default 10, every `--period-ms` 200), reads the outputs Q1–Q8 (Modbus address 8192 on a LOGO! 8), then stops the heartbeat, alternately at 1 and at 0, and reports the time until every output that was on turns off. Without a watchdog in the PLC program it reports that the outputs stayed on. Each mode writes `plc_<mode>.csv` (every request) and `plc_<mode>.txt` (summary).
