@@ -1,6 +1,7 @@
 /**:
   ros__parameters:
-    projector:     false
+    projector:      false   # IR dot projector
+    infra2_enabled: false   # right infrared stream; the classifier uses color only
     color_width:   640
     color_height:  360
     color_fps:     15

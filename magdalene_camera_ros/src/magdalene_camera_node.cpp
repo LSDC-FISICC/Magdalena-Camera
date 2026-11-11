@@ -4,7 +4,8 @@
  * @author Julio Fajardo, PhD
  *
  * Declares ROS 2 parameters, instantiates the magdalene_camera driver, and
- * publishes color and infrared frames on separate image_transport topics from a
+ * publishes color frames (and, when infra2_enabled is set, infrared frames) on
+ * separate image_transport topics from a
  * dedicated capture thread.
  */
 
@@ -21,6 +22,7 @@ MagdaleneCameraNode::MagdaleneCameraNode(const rclcpp::NodeOptions & options)
     declare_parameter("serial",        std::string(""));
     declare_parameter("frame_id",      get_name());
     declare_parameter("projector",     false);
+    declare_parameter("infra2_enabled", false);   // color only by default
     declare_parameter("color_width",   640);
     declare_parameter("color_height",  360);
     declare_parameter("color_fps",     15);
@@ -31,6 +33,7 @@ MagdaleneCameraNode::MagdaleneCameraNode(const rclcpp::NodeOptions & options)
     auto serial    = get_parameter("serial").as_string();
     frame_id_      = get_parameter("frame_id").as_string();
     bool projector = get_parameter("projector").as_bool();
+    bool infra2_enabled = get_parameter("infra2_enabled").as_bool();
 
     // Build stream configurations from declared parameters
     magdalene_camera::StreamConfig color_cfg {
@@ -44,11 +47,12 @@ MagdaleneCameraNode::MagdaleneCameraNode(const rclcpp::NodeOptions & options)
         static_cast<int>(get_parameter("infra2_fps").as_int())
     };
 
-    cam_ = std::make_unique<magdalene_camera>(color_cfg, infra2_cfg, projector, serial);
+    cam_ = std::make_unique<magdalene_camera>(color_cfg, infra2_cfg, projector, serial, infra2_enabled);
 
     // Advertise image topics using image_transport for compressed-transport support
     color_pub_.emplace(image_transport::create_publisher(this, "color/image_raw"));
-    infra2_pub_.emplace(image_transport::create_publisher(this, "infra2/image_raw"));
+    if (infra2_enabled)
+        infra2_pub_.emplace(image_transport::create_publisher(this, "infra2/image_raw"));
 
     cam_->start();
     running_ = true;
@@ -90,7 +94,8 @@ void MagdaleneCameraNode::capture_loop()
             hdr.frame_id = frame_id_;
 
             color_pub_->publish(*cv_bridge::CvImage(hdr, "bgr8",  color).toImageMsg());
-            infra2_pub_->publish(*cv_bridge::CvImage(hdr, "mono8", infra2).toImageMsg());
+            if (infra2_pub_ && !infra2.empty())
+                infra2_pub_->publish(*cv_bridge::CvImage(hdr, "mono8", infra2).toImageMsg());
         } catch (const std::exception & e) {
             RCLCPP_ERROR(get_logger(), "Frame capture error: %s", e.what());
         }

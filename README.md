@@ -7,7 +7,7 @@ ROS 2 wrapper and SDK abstraction for Intel RealSense D555 PoE cameras. Designed
 The D555 cameras connect via Power-over-Ethernet. This repository contains two packages that work together:
 
 - **`magdalene_camera_sdk`**: C++17 library wrapping `librealsense2`. Pure hardware abstraction with no ROS 2 dependencies; can be linked into non-ROS applications. Handles network connection, profile negotiation, and exposes frames as `cv::Mat`.
-- **`magdalene_camera_ros`**: ROS 2 node using the SDK as backend. Reads parameters per camera, instantiates one `magdalene_camera` object per device, publishes as `sensor_msgs/msg/Image` with sensor_data QoS.
+- **`magdalene_camera_ros`**: ROS 2 node using the SDK as backend. Reads parameters per camera, instantiates one `magdalene_camera` object per device, publishes as `sensor_msgs/msg/Image` with the default `image_transport` QoS (reliable, keep last 10).
 
 ```
 librealsense2
@@ -17,10 +17,9 @@ magdalene_camera_sdk    (camera connection, no ROS 2)
 magdalene_camera_ros    (ROS 2 bridge: SDK to topics)
      ↓
 /camera_55/color/image_raw
-/camera_55/infra2/image_raw
 /camera_56/color/image_raw
-/camera_56/infra2/image_raw
-…                             (one pair per camera, camera_55 … camera_59)
+…                             (one per camera, camera_55 … camera_59)
+/camera_55/infra2/image_raw   (only with infra2_enabled: true)
 ```
 
 `colcon` builds `magdalene_camera_sdk` first (declared dependency), then `magdalene_camera_ros`.
@@ -87,7 +86,7 @@ Common consumer 8-port unmanaged switches (TP-Link LS108GP at 62 W, Netgear GS30
 | Infrared 2 | Y8 | 0.23 MB | 3.5 MB/s |
 | **Total per camera** | | | **~13.9 MB/s** |
 
-For 5 cameras: ~70 MB/s = 560 Mbps. Fits within Gigabit headroom on multi-queue NICs.
+By default only the color stream is enabled (`infra2_enabled: false`): about 10.4 MB/s per camera and ~52 MB/s = 420 Mbps for 5 cameras. With infrared enabled: ~70 MB/s = 560 Mbps. Both fit within Gigabit headroom on multi-queue NICs.
 
 ## Software prerequisites
 
@@ -101,7 +100,7 @@ For 5 cameras: ~70 MB/s = 560 Mbps. Fits within Gigabit headroom on multi-queue 
 | `ros-humble-cv-bridge` | | |
 | `ros-humble-image-transport` | | |
 | `ros-humble-rmw-cyclonedds-cpp` | | required, see [Known issues](#known-issues) |
-| D555 firmware | 5.18.x or later | check via `realsense-viewer` → device → Device tab |
+| D555 firmware | 7.58.38448.10612 tested | needs librealsense ≥ 2.58.2; with 2.57 the cameras are listed but cannot be opened. Check with `rs-enumerate-devices --eth -s` |
 
 Refer to the [librealsense release notes](https://github.com/realsenseai/librealsense/wiki/Release-Notes) for the latest firmware compatible with SDK 2.58.
 
@@ -202,7 +201,8 @@ All parameters live in `config/cameras.yaml`. Common parameters are declared onc
 ```yaml
 /**:
   ros__parameters:
-    projector:     false
+    projector:      false
+    infra2_enabled: false
     color_width:   640
     color_height:  360
     color_fps:     15
@@ -271,7 +271,7 @@ ros2 topic bw /camera_55/color/image_raw   # should report ~10.4 MB/s
 
 ## SDK standalone test
 
-`main.cpp` opens one camera and displays color and infrared streams with OpenCV. No ROS 2 required. Accepts the serial number as an optional argument:
+`main.cpp` opens one camera and displays the color stream with OpenCV (and the infrared stream with `--infra2`). No ROS 2 required. Accepts the serial number as an optional argument:
 
 ```bash
 source ~/magdalene_ws/install/setup.bash
@@ -281,11 +281,14 @@ ros2 run magdalene_camera_sdk magdalene_camera_demo 419222301921
 
 # first available camera
 ros2 run magdalene_camera_sdk magdalene_camera_demo
+
+# color and infrared
+ros2 run magdalene_camera_sdk magdalene_camera_demo 419222301921 --infra2
 ```
 
 Controls:
 - `q` or `Esc`: quit
-- `p`: toggle IR projector
+- `p`: toggle IR projector (with `--infra2`)
 
 ## Node parameters
 
@@ -296,6 +299,7 @@ These are set in `config/cameras.yaml`. The table below lists all available para
 | `serial` | `""` | Device serial number (empty = first available) |
 | `frame_id` | node name | TF frame id stamped on published images |
 | `projector` | `false` | Enable IR projector |
+| `infra2_enabled` | `false` | Stream and publish the right infrared image; when `false` only color is captured and the `infra2/image_raw` topic is not created |
 | `color_width` | `640` | Color stream width in pixels |
 | `color_height` | `360` | Color stream height in pixels |
 | `color_fps` | `15` | Color stream frame rate |
@@ -305,7 +309,79 @@ These are set in `config/cameras.yaml`. The table below lists all available para
 | `infra2_fps` | `15` | Infrared stream frame rate |
 | `infra2_format` | `Y8` | Infrared format (only `Y8` supported) |
 
+## Jetson Orin Nano over PoE
+
+Tested on a Jetson Orin Nano Developer Kit (8 GB, L4T 36.5 / JetPack 6.2, 15 W, `jetson_clocks`) with five D555 on a TP-Link PoE switch: all five color streams at 15.0 Hz, no gap longer than one frame (70 ms), 282 Mb/s on the 1 GbE port, no packet or UDP buffer drops, 11 % CPU. Measured with [`tools/sysmon.py`](tools/README.md).
+
+**This holds for about 20 minutes, not indefinitely** (see [*Two cameras fail together after ~20 min*](#two-cameras-fail-together-after-20-min)). Five PoE cameras through a gigabit switch into the Jetson's single 1 GbE port is not reliable for continuous operation; the field system uses USB 3.2.
+
+### One-time setup
+
+1. **librealsense 2.58.2 with DDS**, built on the Jetson into `/usr/local` (about an hour). The ROS 2 package of librealsense (`/opt/ros/humble/lib/.../librealsense2.so.2.57`) has no DDS support and cannot see PoE cameras; it stays installed for USB cameras.
+   ```bash
+   sudo apt install -y git cmake build-essential pkg-config libssl-dev libusb-1.0-0-dev libudev-dev
+   git clone --depth 1 --branch v2.58.2 https://github.com/realsenseai/librealsense.git ~/librealsense-2.58.2
+   cd ~/librealsense-2.58.2 && mkdir -p build && cd build
+   cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+     -DBUILD_WITH_DDS=ON -DFORCE_RSUSB_BACKEND=ON -DBUILD_WITH_CUDA=OFF \
+     -DBUILD_EXAMPLES=OFF -DBUILD_TOOLS=ON -DBUILD_GRAPHICAL_EXAMPLES=OFF \
+     -DBUILD_PYTHON_BINDINGS=OFF -DBUILD_UNIT_TESTS=OFF
+   make -j4 && sudo make install && sudo ldconfig
+   ```
+   `BUILD_EXAMPLES=ON` without `BUILD_GRAPHICAL_EXAMPLES=ON` fails in 2.58 (`OpenGL::GL` not found).
+2. **CycloneDDS**: `sudo apt install ros-humble-rmw-cyclonedds-cpp`.
+3. **Persistent settings**: `sudo bash tools/jetson_poe_setup.sh` sets the UDP buffers (`/etc/sysctl.d/60-dds.conf`), runs `jetson_clocks` at every boot, creates the NetworkManager profile `poe-camaras` (`192.168.11.1/24`, MTU 9000, connected at boot) and adds ROS 2 Humble + CycloneDDS + this workspace to `~/.bashrc`. `bash tools/jetson_poe_setup.sh --check` reports the current state. The profile takes the wired port; for internet on the same port, `sudo nmcli con up <dhcp-profile>`, and back with `sudo nmcli con up poe-camaras`.
+4. **Build this workspace against `/usr/local`**:
+   ```bash
+   colcon build --symlink-install --cmake-args -Drealsense2_DIR=/usr/local/lib/cmake/realsense2
+   ```
+   The node then links `librealsense2.so.2.58` from `/usr/local/lib`, and the binaries carry an RPATH to that directory. This matters since `ros-humble-librealsense2` 2.58.4 (no DDS) uses the same soname: the ROS environment puts it first in `LD_LIBRARY_PATH`, and without the RPATH the node would load it and find no PoE camera. Check with the ROS environment sourced:
+   ```bash
+   ldd ~/magdalene_ws/install/magdalene_camera_ros/lib/magdalene_camera_ros/magdalene_camera_node | grep realsense   # /usr/local/lib/...
+   ```
+   The librealsense tools are not covered: run them as `env -u LD_LIBRARY_PATH /usr/local/bin/rs-enumerate-devices --eth`.
+5. **PoE switch**: turn off the port *recovery* (auto power-cycle) and *extend* modes of TP-Link switches; with recovery on, two of five cameras stopped for 10–35 s at a time.
+
+### What each item fixed
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `stream 'ObjectDetection' is of unknown type`; `No device connected` | firmware 7.58 needs librealsense ≥ 2.58.2 | librealsense 2.58.2 |
+| `rs-enumerate-devices` lists nothing, `--eth` lists the cameras | DDS discovery is off by default in 2.58 | the SDK enables it in its context |
+| `No device connected` right after start | Ethernet devices appear a few seconds after the context is created | the SDK retries for 15 s |
+| Some cameras deliver no frames; `sysmon` reports UDP receive-buffer overflows | default `net.core.rmem_max` (212 kB) | `60-dds.conf` |
+| Cameras stop for 10–35 s at a time | switch PoE recovery mode | recovery off |
+| CPU at 730 MHz after a reboot | `jetson_clocks` is not persistent | `jetson-clocks.service` |
+| After an `apt upgrade`, every node fails with `No device connected` and `rs-enumerate-devices --eth` finds nothing, while the cameras answer ping | `ros-humble-librealsense2` 2.58.4 (no DDS) has the same soname as the DDS build in `/usr/local` and comes first in `LD_LIBRARY_PATH` | rebuild this workspace (RPATH to `/usr/local/lib`); run the tools with `env -u LD_LIBRARY_PATH` |
+
+### Two cameras fail together after ~20 min
+
+In 30- and 60-minute runs on the TP-Link switch, after 20–25 min two cameras slowed down over 2–3 minutes and then delivered almost no frames, while still answering ping. Restarting the node of **either** camera of the pair brought the **other** one back to 15 Hz within one second, before the restarted camera streamed again; the restarted camera then also ran at 15 Hz. Later another pair failed the same way.
+
+| Run (60 min, `sysmon`) | |
+|---|---|
+| 22–25 min | cameras .57 and .59 fall to ~0 Hz; .55, .56, .58 stay at 15 Hz |
+| 25.3 min | node of .59 restarted: .57 back to 15 Hz in 1 s, .59 after 6 s |
+| 41–44 min | cameras .55 and .57 fall; node of .55 restarted: .57 back in 1 s |
+| whole run | 0 UDP buffer overflows, 0 IP reassembly failures, 0 NIC/driver drops, Tj 60 °C, ping never lost |
+
+During each failure the Jetson port still received 274–278 Mb/s instead of 282: the cameras kept sending, and the ~5–8 Mb/s missing fit a few percent of the two cameras' packets being lost before the Jetson. One 640×360 frame is ~460 KB, about 50 jumbo packets, so losing ~5 % of a camera's packets loses nearly every frame.
+
+What this points to: the two failing streams interfere with each other on a path they share, and the Jetson counts no loss, which leaves the switch port towards the Jetson. Each camera sends a frame as a ~3.7 ms burst at 1 Gb/s; the cameras are not synchronized, so their bursts drift relative to each other. When two bursts start to overlap, the switch must buffer up to half a frame for the single 1 GbE egress port, and a small unmanaged switch drops the excess. Restarting either camera shifts its phase and ends the overlap until the drift brings two streams together again. A hot switch would not recover in one second, and a fault in one node process could not stop a camera served by another process.
+
+On a Cisco Catalyst 3850, two of five cameras also lost most frames; its default egress buffers are small (check `show interfaces <port> | include output drops`; `qos queue-softmax-multiplier 1200` enlarges them).
+
+Options, from the most to the least robust:
+- **Multi-gigabit host link**: a 2.5 or 10 GbE NIC on the Jetson (e.g. an M.2 Key M card; check that L4T has its driver) and a switch with a multi-gigabit uplink, as the D555 documentation recommends for several cameras. The egress then drains faster than two 1 Gb/s bursts arrive.
+- **A switch with deep egress buffers**, or two Jetson ports with at most 2–3 cameras each.
+- **Restarting the stream automatically** when a camera's rate falls (not implemented): it hides the symptom at the cost of a 1–6 s gap for that camera.
+- **USB 3.2**, as in the field system.
+
+To check a run, `sudo python3 tools/sysmon.py record` counts the traffic of each camera address: a failing camera whose traffic drops by a few percent while the Jetson counts no loss fits this explanation.
+
 ## Troubleshooting
+
+To find whether a problem comes from memory, the GPU, the network or USB, record a run with [`tools/sysmon.py`](tools/README.md): it logs every drop counter between the cable and the ROS topic, memory and GPU use, and the real rate of each camera topic, and names the likely cause.
 
 ### Cameras not discovered (`rs-enumerate-devices --eth` returns empty)
 
@@ -381,7 +457,7 @@ Mitigations in order of effort:
 
 ### `ros2 topic hz` reports half the expected rate
 
-The CLI tool deserializes every message in Python and falls behind for large image payloads. Use `ros2 topic bw` instead and compute the rate from message size, or write a dedicated subscriber with explicit BEST_EFFORT QoS.
+The CLI tool deserializes every message in Python and falls behind for large image payloads. Use `ros2 topic bw` instead and compute the rate from message size, or [`tools/sysmon.py topics`](tools/README.md), a subscriber that counts messages without deserializing them. Subscribe reliable, like the publisher: a best-effort subscriber of large raw images can lose frames inside DDS even when nothing else is wrong.
 
 ### `std::bad_array_new_length` on node startup
 
@@ -389,7 +465,7 @@ See [Known issues](#known-issues).
 
 ### Camera publishes but image stream freezes after a few seconds
 
-Likely cause is PoE undervoltage. Check:
+On TP-Link switches, first turn off the port recovery (auto power-cycle) mode: it restarts cameras that it judges unresponsive. Otherwise, the likely cause is PoE undervoltage. Check:
 
 ```bash
 sudo ethtool eno2 | grep -E "Speed|Duplex"
