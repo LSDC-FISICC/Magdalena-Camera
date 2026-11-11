@@ -10,7 +10,8 @@
 #   2. jetson_clocks at every boot (systemd unit). Without it the CPU drops to 730 MHz;
 #      it is also the configuration the E6 latency was measured with.
 #   3. A NetworkManager profile "poe-camaras" on the camera interface: 192.168.11.1/24,
-#      MTU 9000 (the D555 needs jumbo frames), connected automatically at boot.
+#      MTU 9000 (the D555 needs jumbo frames), a multicast route (224.0.0.0/4) so that DDS
+#      discovery has a route without a default gateway, connected automatically at boot.
 #      For internet on the same port, bring the DHCP profile up by hand:
 #      sudo nmcli con up <dhcp-profile>, and back with sudo nmcli con up poe-camaras.
 #   4. ROS 2 environment for the user who ran sudo (~/.bashrc): Humble, CycloneDDS
@@ -58,6 +59,15 @@ check() {
         || bad "ros-humble-rmw-cyclonedds-cpp missing (sudo apt install ros-humble-rmw-cyclonedds-cpp)"
     local lrs; lrs=$(readlink -f /usr/local/lib/librealsense2.so 2>/dev/null)
     case "$lrs" in *2.58*|*2.59*|*2.6*) ok "librealsense $lrs";; *) bad "librealsense '${lrs:-none}' (needs >= 2.58.2 with DDS)";; esac
+    # ros-humble-librealsense2 >= 2.58.4 (no DDS) has the same soname as the DDS build in /usr/local;
+    # the node must still load /usr/local with the ROS environment in LD_LIBRARY_PATH (RPATH)
+    local node=$WS/install/magdalene_camera_ros/lib/magdalene_camera_ros/magdalene_camera_node lib
+    if [ -x "$node" ]; then
+        lib=$(LD_LIBRARY_PATH=/opt/ros/humble/lib/aarch64-linux-gnu:/opt/ros/humble/lib ldd "$node" 2>/dev/null \
+              | awk '/librealsense2/ {print $3; exit}')
+        case "$lib" in /usr/local/*) ok "camera node loads $lib, also with the ROS environment";;
+            *) bad "camera node loads '${lib:-?}' with the ROS environment (rebuild the workspace for the RPATH)";; esac
+    fi
     local reach=0
     for i in 55 56 57 58 59; do ping -c1 -W1 192.168.11.$i >/dev/null 2>&1 && reach=$((reach + 1)); done
     [ "$reach" -eq 5 ] && ok "5/5 cameras answer ping" || bad "$reach/5 cameras answer ping"
@@ -98,11 +108,11 @@ systemctl daemon-reload && systemctl enable --now jetson-clocks.service >/dev/nu
 step "3. NetworkManager profile poe-camaras on $IFACE"
 if nmcli -t -f NAME con show | grep -qx poe-camaras; then
     nmcli con mod poe-camaras connection.interface-name "$IFACE" ipv4.method manual ipv4.addresses "$CAM_NET" \
-        ipv6.method disabled 802-3-ethernet.mtu 9000 connection.autoconnect yes connection.autoconnect-priority 10
+        ipv6.method disabled 802-3-ethernet.mtu 9000 ipv4.routes "224.0.0.0/4" connection.autoconnect yes connection.autoconnect-priority 10
     ok "updated"
 else
     nmcli con add type ethernet ifname "$IFACE" con-name poe-camaras ipv4.method manual ipv4.addresses "$CAM_NET" \
-        ipv6.method disabled 802-3-ethernet.mtu 9000 connection.autoconnect yes connection.autoconnect-priority 10 >/dev/null
+        ipv6.method disabled 802-3-ethernet.mtu 9000 ipv4.routes "224.0.0.0/4" connection.autoconnect yes connection.autoconnect-priority 10 >/dev/null
     ok "created"
 fi
 nmcli con up poe-camaras >/dev/null && ok "active (other profiles on $IFACE are now down; see the header for internet)"

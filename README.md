@@ -342,7 +342,11 @@ Tested on a Jetson Orin Nano Developer Kit (8 GB, L4T 36.5 / JetPack 6.2, 15 W, 
    ```bash
    colcon build --symlink-install --cmake-args -Drealsense2_DIR=/usr/local/lib/cmake/realsense2
    ```
-   The node then links `librealsense2.so.2.58` from `/usr/local/lib`; no `LD_LIBRARY_PATH` is needed.
+   The node then links `librealsense2.so.2.58` from `/usr/local/lib`, and the binaries carry an RPATH to that directory. This matters since `ros-humble-librealsense2` 2.58.4 (no DDS) uses the same soname: the ROS environment puts it first in `LD_LIBRARY_PATH`, and without the RPATH the node would load it and find no PoE camera. Check with the ROS environment sourced:
+   ```bash
+   ldd ~/magdalene_ws/install/magdalene_camera_ros/lib/magdalene_camera_ros/magdalene_camera_node | grep realsense   # /usr/local/lib/...
+   ```
+   The librealsense tools are not covered: run them as `env -u LD_LIBRARY_PATH /usr/local/bin/rs-enumerate-devices --eth`.
 5. **PoE switch**: turn off the port *recovery* (auto power-cycle) and *extend* modes of TP-Link switches; with recovery on, two of five cameras stopped for 10–35 s at a time.
 
 ### What each item fixed
@@ -355,6 +359,7 @@ Tested on a Jetson Orin Nano Developer Kit (8 GB, L4T 36.5 / JetPack 6.2, 15 W, 
 | Some cameras deliver no frames; `sysmon` reports UDP receive-buffer overflows | default `net.core.rmem_max` (212 kB) | `60-dds.conf` |
 | Cameras stop for 10–35 s at a time | switch PoE recovery mode | recovery off |
 | CPU at 730 MHz after a reboot | `jetson_clocks` is not persistent | `jetson-clocks.service` |
+| After an `apt upgrade`, every node fails with `No device connected` and `rs-enumerate-devices --eth` finds nothing, while the cameras answer ping | `ros-humble-librealsense2` 2.58.4 (no DDS) has the same soname as the DDS build in `/usr/local` and comes first in `LD_LIBRARY_PATH` | rebuild this workspace (RPATH to `/usr/local/lib`); run the tools with `env -u LD_LIBRARY_PATH` |
 
 ### Two cameras fail together after ~20 min
 
