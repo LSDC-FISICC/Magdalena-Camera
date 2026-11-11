@@ -870,6 +870,8 @@ def plot(d, rows, topics, snap):
             rs = [r for r in topics if r["topic"] == name]
             ax[4].plot([float(r["t"]) - t0 for r in rs], [float(r["hz"]) for r in rs], lw=1, label=name)
         ax[4].set_ylabel("messages / s")
+        # From zero: an autoscaled 14-16 axis makes one late frame look like an outage
+        ax[4].set_ylim(0, 1.15 * max([float(r["hz"]) for r in topics] + [1.0]))
     ax[-1].set_xlabel("s")
     for a in ax:
         a.grid(alpha=0.3)
