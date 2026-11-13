@@ -10,8 +10,10 @@
     infra2_fps:    15
     # Stream watchdog: the node exits when the color rate stays below fraction x color_fps,
     # and multi_camera.launch.py starts it again (respawn) in a fresh process
-    watchdog_min_fraction: 0.67   # 0.0 disables it (write it as a float)
+    watchdog_min_fraction: 0.67   # stalled camera; 0.0 disables this rule (write it as a float)
     watchdog_low_s:        3      # seconds below the threshold before an exit is scheduled
+    watchdog_window_fraction: 0.9 # degraded camera: mean over the window below 13.5 fps; 0.0 disables
+    watchdog_window_s:     30     # window length in seconds
     watchdog_jitter_s:     5.0    # random wait, cancelled if the rate recovers
     watchdog_grace_s:      20.0   # no decision this long after the start
 

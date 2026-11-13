@@ -311,7 +311,9 @@ These are set in `config/cameras.yaml`. The table below lists all available para
 | `infra2_format` | `Y8` | Infrared format (only `Y8` supported) |
 | `watchdog_min_fraction` | `0.67` | Exit, to be respawned by the launch file, when the color rate stays below this fraction of `color_fps` (10 fps at 15 fps); `0.0` disables it (a float: `0` is rejected as an integer), `color/fps` is still published |
 | `watchdog_low_s` | `3` | Seconds below the threshold before an exit is scheduled |
-| `watchdog_jitter_s` | `5.0` | Random wait before the exit, cancelled if the rate recovers meanwhile; when two cameras fail together, the first restart usually frees the other |
+| `watchdog_window_fraction` | `0.9` | Also exit when the mean color rate over the last `watchdog_window_s` seconds falls below this fraction of `color_fps` (13.5 fps at 15 fps). Over PoE a failing camera oscillates between 10 and 15 fps for minutes before it stalls; in a 3 h run this rule would have restarted it 1.5 to 8 min earlier. `0.0` disables it |
+| `watchdog_window_s` | `30` | Length of that window, in seconds |
+| `watchdog_jitter_s` | `5.0` | Random wait before the exit, cancelled once the rate is back for two consecutive seconds; when two cameras fail together, the first restart usually frees the other |
 | `watchdog_grace_s` | `20.0` | No decision this long after the node starts |
 
 `multi_camera.launch.py` starts the nodes `stagger_s` seconds apart (default `2.0`) and starts a node again when it exits (`respawn:=true`, the default), after 2 s plus 0.7 s per camera index. A node stopped by the watchdog exits with code 3. `respawn:=false stagger_s:=0` restores the previous behavior.

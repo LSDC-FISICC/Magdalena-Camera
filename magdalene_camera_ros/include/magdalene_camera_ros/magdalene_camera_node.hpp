@@ -17,6 +17,7 @@ class magdalene_camera;
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <random>
@@ -58,7 +59,11 @@ private:
     double                    min_fps_{0.0};        // 0 disables the exit
     int                       low_s_needed_{3};
     double                    jitter_s_{5.0};
+    double                    window_fps_{0.0};     // mean-rate threshold; 0 disables the window rule
+    int                       window_s_{30};
+    std::deque<double>        window_;             // per-second rates of the last window_s_ seconds
     int                       low_s_{0};
+    int                       ok_s_{0};
     bool                      pending_{false};
     bool                      exit_requested_{false};
     Clock::time_point         grace_until_{};
